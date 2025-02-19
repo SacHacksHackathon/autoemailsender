@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+import csv
+import argparse
+import smtplib
+import getpass
+import logging
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
+import sys
+
+def send_email(smtp_server, port, sender_email, password, recipients, subject, plain_text, html_text, banner_data):
+    # Create a multipart message with related parts (HTML & inline image)
+    msg = MIMEMultipart('related')
+    msg['Subject'] = subject
+    msg['From'] = sender_email
+    # Set a generic "To" field (using the sender) and add all recipients in BCC
+    msg['To'] = sender_email
+    msg['Bcc'] = ", ".join(recipients)
+
+    # Create an alternative container for plain text and HTML content
+    msgAlternative = MIMEMultipart('alternative')
+    msg.attach(msgAlternative)
+
+    # Attach the plain text version
+    part1 = MIMEText(plain_text, 'plain')
+    msgAlternative.attach(part1)
+
+    # Attach the HTML version (includes the banner image via cid:banner)
+    part2 = MIMEText(html_text, 'html')
+    msgAlternative.attach(part2)
+
+    # Attach the banner image
+    img = MIMEImage(banner_data)
+    img.add_header('Content-ID', '<banner>')
+    img.add_header('Content-Disposition', 'inline', filename="banner.png")
+    msg.attach(img)
+
+    try:
+        with smtplib.SMTP(smtp_server, port) as server:
+            server.starttls()  # Secure the connection
+            server.login(sender_email, password)
+            # Send the email with BCC recipients
+            server.sendmail(sender_email, recipients, msg.as_string())
+            logging.info("Email sent to %d recipients: %s", len(recipients), ", ".join(recipients))
+            print(f"[SUCCESS] Email sent to {len(recipients)} recipients.")
+    except Exception as e:
+        logging.error("Failed to send email: %s", e)
+        print(f"[ERROR] Failed to send email: {e}")
+        sys.exit(1)
+
+def main():
+    # Set up logging to file "email_log.txt"
+    logging.basicConfig(filename='email_log.txt', level=logging.INFO,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    parser = argparse.ArgumentParser(
+        description="Send a bulk email with a banner image to recipients listed in a CSV file."
+    )
+    parser.add_argument("--csv", required=True,
+                        help="Path to the CSV file containing recipient email addresses (headers: 'Name:' and 'Email:').")
+    parser.add_argument("--banner", required=True,
+                        help="Path to the banner image file (e.g., banner.png).")
+    parser.add_argument("--sender", required=True,
+                        help="Sender's email address.")
+    parser.add_argument("--subject", default="SacHacks Invitation",
+                        help="Subject line for the email (default: 'SacHacks Invitation').")
+    parser.add_argument("--message", default="Hello,\n\nWe are excited to invite you to participate in SacHacks!",
+                        help="Custom email message. If not provided, a default message is used.")
+    parser.add_argument("--smtp", default="smtp.gmail.com",
+                        help="SMTP server address (default: smtp.gmail.com).")
+    parser.add_argument("--port", type=int, default=587,
+                        help="SMTP server port (default: 587).")
+    args = parser.parse_args()
+
+    # Read banner image data
+    try:
+        with open(args.banner, "rb") as f:
+            banner_data = f.read()
+    except Exception as e:
+        logging.error("Could not read banner image file: %s", e)
+        print(f"[ERROR] Could not read banner image file: {e}")
+        sys.exit(1)
+
+    # Securely prompt for the sender's email password
+    password = getpass.getpass(prompt=f"Enter password for {args.sender}: ")
+
+    # Read recipient emails from CSV file
+    recipients = []
+    try:
+        with open(args.csv, newline="") as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                if "Email:" in row:
+                    email = row["Email:"].strip()
+                    if email:
+                        recipients.append(email)
+                else:
+                    logging.error("CSV header does not contain 'Email:'")
+                    print("[ERROR] CSV header does not contain 'Email:'")
+                    sys.exit(1)
+    except Exception as e:
+        logging.error("Could not read CSV file: %s", e)
+        print(f"[ERROR] Could not read CSV file: {e}")
+        sys.exit(1)
+
+    # Enforce daily limit of 500 emails
+    if len(recipients) > 500:
+        logging.error("Recipient count (%d) exceeds the daily limit of 500.", len(recipients))
+        print(f"[ERROR] Recipient count ({len(recipients)}) exceeds the daily limit of 500.")
+        sys.exit(1)
+
+    # Prepare email message text (plain and HTML versions)
+    plain_text = args.message
+    html_text = f"""
+    <html>
+        <body>
+            <img src="cid:banner" alt="Banner" style="width:100%;"><br>
+            <p>{args.message.replace('\n', '<br>')}</p>
+        </body>
+    </html>
+    """
+
+    # Send the email
+    send_email(args.smtp, args.port, args.sender, password, recipients, args.subject, plain_text, html_text, banner_data)
+
+if __name__ == "__main__":
+    main()
